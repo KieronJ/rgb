@@ -162,6 +162,7 @@ impl Cartridge {
     pub fn get_type(&self) -> CartridgeType {
         match self.rom[0x147] {
             0x00 => CartridgeType::new(CartridgeMapper::NONE, false, false, false, false),
+            0x01 => CartridgeType::new(CartridgeMapper::MBC1, false, false, false, false),
             _    => CartridgeType::new(CartridgeMapper::INVALID, false, false, false, false)
         }
     }

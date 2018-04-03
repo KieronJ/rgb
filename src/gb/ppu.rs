@@ -18,6 +18,7 @@ enum PpuMode {
     VBLANK,
 }
 
+#[derive(Clone, Copy)]
 enum PpuSpriteSize {
     NORMAL,
     TALL,
@@ -44,6 +45,27 @@ impl PpuControl {
             background_enable: false,
         }
     }
+
+    pub fn read(&self) -> u8 {
+        (self.lcd_enable as u8)    << 7 |
+        (self.window_enable as u8) << 5 |
+        (self.sprite_size as u8)   << 2 |
+        (self.sprite_enable as u8) << 1 |
+        self.background_enable as u8
+    }
+
+    pub fn write(&mut self, value: u8) {
+        self.lcd_enable = (value & 0x80) != 0;
+        self.window_enable = (value & 0x20) != 0;
+
+        self.sprite_size = match (value & 0x04) != 0 {
+            false => PpuSpriteSize::NORMAL,
+            true => PpuSpriteSize::TALL,
+        };
+
+        self.sprite_enable = (value & 0x02) != 0;
+        self.background_enable = (value & 0x01) != 0;
+    }
 }
 
 pub struct PpuStatus {
@@ -66,14 +88,27 @@ impl PpuStatus {
     }
 }
 
-#[derive(Clone)]
-enum PpuShade {
+#[derive(Clone, Copy)]
+pub enum PpuShade {
     WHITE,
     LIGHT,
     DARK,
     BLACK,
 }
 
+impl PpuShade {
+    pub fn from_u8(value: u8) -> PpuShade {
+        match value & 0x03 {
+            0b00 => PpuShade::WHITE,
+            0b01 => PpuShade::LIGHT,
+            0b10 => PpuShade::DARK,
+            0b11 => PpuShade::BLACK,
+            _ => unreachable!()
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 pub struct PpuPalette {
     colour3: PpuShade,
     colour2: PpuShade,
@@ -218,6 +253,10 @@ impl Ppu {
                 if self.mode_clocks == PPU_VRAM_CLOCKS {
                     self.mode_clocks = 0;
                     self.mode = PpuMode::HBLANK;
+
+                    if self.control.lcd_enable && self.control.background_enable {
+                        self.render_scanline();
+                    }
                 }
             },
 
@@ -228,6 +267,8 @@ impl Ppu {
 
                     if self.scanline == PPU_VBLANK_START {
                         self.mode = PpuMode::VBLANK;
+                        self.window.render(&self.framebuffer);
+                        self.window.sleep_frame();
                     } else {
                         self.mode = PpuMode::OAM;
                     }
@@ -248,7 +289,69 @@ impl Ppu {
         };
     }
 
+    fn render_scanline(&mut self) {
+        let scrolled_scanline = (self.scanline + self.scroll_y as usize) % 256;
+
+        let background_map_address = (scrolled_scanline / 8) * 32;
+
+        for i in 0..20 {
+            let tile_number = self.background_ram[background_map_address + i];
+            let tile_row = scrolled_scanline % 8;
+
+            let tile_address = (tile_number as usize * 16) + (tile_row * 2);
+
+            let tile_lo = self.tile_ram[tile_address];
+            let tile_hi = self.tile_ram[tile_address + 1];
+
+            for j in 0..8 {
+                let framebuffer_address = (self.scanline * 160) + (i * 8) + j;
+
+                let pixel_shade_hi = ((tile_hi << j) & 0x80) >> 6;
+                let pixel_shade_lo = ((tile_lo << j) & 0x80) >> 7;
+                let pixel_shade = pixel_shade_hi | pixel_shade_lo;
+
+                self.framebuffer[framebuffer_address] = match pixel_shade {
+                    0b00 => self.background_palette.colour0,
+                    0b01 => self.background_palette.colour1,
+                    0b10 => self.background_palette.colour2,
+                    0b11 => self.background_palette.colour3,
+                    _ => unreachable!()
+                };
+            }
+        }
+    }
+
+    pub fn lcdc_read(&self) -> u8 {
+        self.control.read()
+    }
+
+    pub fn lcdc_write(&mut self, value: u8) {
+        self.control.write(value);
+    }
+
+    pub fn scy_read(&self) -> u8 {
+        self.scroll_y
+    }
+
+    pub fn scy_write(&mut self, value: u8) {
+        self.scroll_y = value;
+    }
+
     pub fn ly_read(&self) -> u8 {
         self.scanline as u8
+    }
+
+    pub fn bgp_read(&self) -> u8 {
+        ((self.background_palette.colour3 as u8) << 6) |
+        ((self.background_palette.colour2 as u8) << 4) |
+        ((self.background_palette.colour1 as u8) << 2) |
+          self.background_palette.colour0 as u8
+    }
+
+    pub fn bgp_write(&mut self, value: u8) {
+        self.background_palette.colour3 = PpuShade::from_u8((value >> 6) & 0x03);
+        self.background_palette.colour2 = PpuShade::from_u8((value >> 4) & 0x03);
+        self.background_palette.colour1 = PpuShade::from_u8((value >> 2) & 0x03);
+        self.background_palette.colour0 = PpuShade::from_u8(value & 0x03);
     }
 }

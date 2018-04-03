@@ -15,9 +15,9 @@ impl Gameboy {
 
         let mapper = cartridge.get_type().get_mapper();
 
-        if mapper != cartridge::CartridgeMapper::NONE {
-            panic!("ERROR: unsupported mapper {:#?}", mapper);
-        }
+        //if mapper != cartridge::CartridgeMapper::NONE {
+        //    panic!("ERROR: unsupported mapper {:#?}", mapper);
+        //}
 
         let bus = bus::Bus::new(cartridge);
 

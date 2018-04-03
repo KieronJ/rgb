@@ -9,6 +9,7 @@ use super::bus;
 pub struct Z80 {
     bus: bus::Bus,
     regs: Registers,
+    ime: bool,
 }
 
 impl Z80 {
@@ -16,6 +17,7 @@ impl Z80 {
         Z80 {
             bus: bus,
             regs: Registers::new(),
+            ime: false,
         }
     }
 
@@ -24,16 +26,19 @@ impl Z80 {
     }
 
     pub fn run(&mut self) {
-        if self.regs.pc >= 0x100 {
-            panic!("INFO: finished bootstrap");
-        }
-
         let pc = self.imm();
         let opcode = self.bus.read(pc);
+
+        if pc == 0x100 {
+            println!("INFO: finished bootstrap");
+        }
 
         //print!("0x{:04x}: ", pc);
 
         match opcode {
+            0x00 => {}, // nop
+            0x01 => self.ld_imm16(BC),
+            0x03 => self.inc16(BC),
             0x04 => self.inc(B),
             0x05 => self.dec(B),
             0x06 => self.ld_imm(B),
@@ -41,12 +46,15 @@ impl Z80 {
             0x0d => self.dec(C),
             0x0e => self.ld_imm(C),
             0x11 => self.ld_imm16(DE),
+            0x12 => self.ld_nn_a(DE),
             0x13 => self.inc16(DE),
+            0x14 => self.inc(D),
             0x15 => self.dec(D),
             0x16 => self.ld_imm(D),
             0x17 => self.alu_rl(A),
             0x18 => self.jr(),
             0x1a => self.ld_a_nn(DE),
+            0x1c => self.inc(E),
             0x1d => self.dec(E),
             0x1e => self.ld_imm(E),
             0x20 => self.jr_cond(Flags::ZERO, false),
@@ -54,33 +62,57 @@ impl Z80 {
             0x22 => self.ld_hlpp_a(),
             0x23 => self.inc16(HL),
             0x24 => self.inc(H),
+            0x26 => self.ld_imm(H),
             0x28 => self.jr_cond(Flags::ZERO, true),
+            0x2a => self.ld_a_hlpp(),
+            0x2c => self.inc(L),
+            0x2d => self.dec(L),
             0x2e => self.ld_imm(L),
             0x31 => self.ld_imm16(SP),
             0x32 => self.ld_hlmp_a(),
             0x3d => self.dec(A),
             0x3e => self.ld_imm(A),
+            0x46 => self.ld_n_hlp(B),
+            0x47 => self.ld_n_n(B, A),
+            0x4e => self.ld_n_hlp(C),
             0x4f => self.ld_n_n(C, A),
+            0x56 => self.ld_n_hlp(D),
             0x57 => self.ld_n_n(D, A),
             0x67 => self.ld_n_n(H, A),
-            0x77 => self.ld_hlp(A),
+            0x77 => self.ld_hlp_n(A),
             0x78 => self.ld_n_n(A, B),
             0x7b => self.ld_n_n(A, E),
             0x7c => self.ld_n_n(A, H),
             0x7d => self.ld_n_n(A, L),
             0x86 => self.add_hlp(),
             0x90 => self.sub(B),
+            0xa9 => self.xor(C),
+            0xae => self.xor_hlp(),
             0xaf => self.xor(A),
+            0xb1 => self.or(C),
+            0xb7 => self.or(A),
             0xbe => self.cp_hlp(),
             0xc1 => self.pop_nn(BC),
+            0xc3 => self.jp(),
+            0xc4 => self.call_cond(Flags::ZERO, false),
             0xc5 => self.push_nn(BC),
+            0xc6 => self.add_imm(),
             0xc9 => self.ret(),
             0xcb => self.cb_instr(),
             0xcd => self.call(),
+            0xd5 => self.push_nn(DE),
+            0xd6 => self.sub_imm(),
             0xe0 => self.ldh_n_a(),
+            0xe1 => self.pop_nn(HL),
             0xe2 => self.ld_cp_a(),
+            0xe5 => self.push_nn(HL),
+            0xe6 => self.and_imm(),
             0xea => self.ld_imm16_a(),
             0xf0 => self.ldh_a_n(),
+            0xf1 => self.pop_nn(AF),
+            0xf3 => self.ime = false,
+            0xf5 => self.push_nn(AF),
+            0xfa => self.ld_a_imm16(),
             0xfe => self.cp_imm(),
             _ => panic!("ERROR: unknown instruction 0x{:02x}", opcode)
         }
@@ -115,6 +147,52 @@ impl Z80 {
     pub fn imm16(&mut self) -> u16 {
         self.regs.pc += 2;
         self.regs.pc - 2
+    }
+
+    fn jp(&mut self) {
+        let pc = self.imm16();
+
+        self.regs.pc = self.read16(pc);
+    }
+
+    fn and_imm(&mut self) {
+        let pc = self.imm();
+        let value = self.read8(pc);
+
+        self.regs.a &= value;
+
+        self.regs.f.set(Flags::ZERO, self.regs.a == 0);
+        self.regs.f.set(Flags::SUBTRACT, false);
+        self.regs.f.set(Flags::HALFCARRY, true);
+        self.regs.f.set(Flags::CARRY, false);
+    }
+
+    fn add_imm(&mut self) {
+        let pc = self.imm();
+        let value = self.read8(pc);
+        let a = self.regs.a;
+
+        let result = a.wrapping_add(value);
+
+        self.regs.a = result;
+        self.regs.f.set(Flags::ZERO, result == 0);
+        self.regs.f.set(Flags::SUBTRACT, false);
+        self.regs.f.set(Flags::HALFCARRY, (a & 0x0f) + (value & 0x0f) > 0x0f);
+        self.regs.f.set(Flags::CARRY, (a as usize) + (value as usize) > 0xff);
+    }
+
+    fn sub_imm(&mut self) {
+        let pc = self.imm();
+        let value = self.read8(pc);
+        let a = self.regs.a;
+
+        let result = a.wrapping_sub(value);
+
+        self.regs.a = result;
+        self.regs.f.set(Flags::ZERO, result == 0);
+        self.regs.f.set(Flags::SUBTRACT, true);
+        self.regs.f.set(Flags::HALFCARRY, (a & 0x0f) < (value & 0x0f));
+        self.regs.f.set(Flags::CARRY, a < value);
     }
 
     fn add_hlp(&mut self) {
@@ -217,8 +295,22 @@ impl Z80 {
         self.regs.write8(reg, value);
     }
 
+    fn ld_nn_a(&mut self, reg: Reg16) {
+        let address = self.regs.read16(reg);
+        let a = self.regs.a;
+
+        self.write8(address, a);
+    }
+
     fn ld_a_nn(&mut self, reg: Reg16) {
         let address = self.regs.read16(reg);
+
+        self.regs.a = self.read8(address);
+    }
+
+    fn ld_a_imm16(&mut self) {
+        let pc = self.imm16();
+        let address = self.read16(pc);
 
         self.regs.a = self.read8(address);
     }
@@ -231,7 +323,14 @@ impl Z80 {
         self.write8(address, value);
     }
 
-    fn ld_hlp(&mut self, reg: Reg8) {
+    fn ld_n_hlp(&mut self, reg: Reg8) {
+        let hl = self.regs.read16(HL);
+        let value = self.read8(hl);
+
+        self.regs.write8(reg, value);
+    }
+
+    fn ld_hlp_n(&mut self, reg: Reg8) {
         let hl = self.regs.read16(HL);
         let value = self.regs.read8(reg);
 
@@ -260,6 +359,13 @@ impl Z80 {
         self.regs.write16(reg, value);
     }
 
+    fn ld_a_hlpp(&mut self) {
+        let hl = self.regs.read16(HL);
+        
+        self.regs.a = self.read8(hl);
+        self.regs.write16(HL, hl.wrapping_add(1));
+    }
+
     fn ld_hlpp_a(&mut self) {
         let a = self.regs.a;
         let hl = self.regs.read16(HL);
@@ -276,11 +382,35 @@ impl Z80 {
         self.regs.write16(HL, hl.wrapping_sub(1));
     }
 
+    fn or(&mut self, reg: Reg8) {
+        let value = self.regs.read8(reg);
+
+        self.regs.a |= value;
+        self.regs.f.set(Flags::ZERO, self.regs.a == 0);
+        self.regs.f.set(Flags::SUBTRACT, false);
+        self.regs.f.set(Flags::HALFCARRY, false);
+        self.regs.f.set(Flags::CARRY, false);
+    }
+
     fn xor(&mut self, reg: Reg8) {
         let value = self.regs.read8(reg);
 
         self.regs.a ^= value;
         self.regs.f.set(Flags::ZERO, self.regs.a == 0);
+        self.regs.f.set(Flags::SUBTRACT, false);
+        self.regs.f.set(Flags::HALFCARRY, false);
+        self.regs.f.set(Flags::CARRY, false);
+    }
+
+    fn xor_hlp(&mut self) {
+        let hl = self.regs.read16(HL);
+        let value = self.read8(hl);
+
+        self.regs.a ^= value;
+        self.regs.f.set(Flags::ZERO, self.regs.a == 0);
+        self.regs.f.set(Flags::SUBTRACT, false);
+        self.regs.f.set(Flags::HALFCARRY, false);
+        self.regs.f.set(Flags::CARRY, false);
     }
 
     fn cb_instr(&mut self) {
@@ -360,6 +490,16 @@ impl Z80 {
     fn push16(&mut self, value: u16) {
         self.push8((value >> 8) as u8);
         self.push8(value as u8);
+    }
+
+    fn call_cond(&mut self, flag: Flags, state: bool) {
+        let pc = self.imm16();
+        let dest = self.read16(pc);
+
+        if !state ^ self.regs.f.contains(flag) {
+            self.push16(pc + 2);
+            self.regs.pc = dest;
+        }
     }
 
     fn call(&mut self) {
