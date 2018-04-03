@@ -1,0 +1,9 @@
+[package]
+name = "rgb"
+version = "0.1.0"
+authors = ["Kieron Josephs <kieron.josephs00@gmail.com>"]
+license = "MIT"
+
+[dependencies]
+bitflags = "1.0.1"
+sdl2 = "0.31.0"

@@ -1,0 +1,7 @@
+/.vscode/
+/bootrom/
+/roms/
+/target/
+*.lock
+*.bat
+*.gb
