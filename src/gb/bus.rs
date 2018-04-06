@@ -25,6 +25,9 @@ pub struct Bus {
 
     work_ram: Box<[u8]>,
 
+    serial_buffer: u8,
+    serial_control: u8,
+
     high_ram: Box<[u8]>,
 
     ie: InterruptEnable,
@@ -43,6 +46,9 @@ impl Bus {
             ppu: ppu::Ppu::new(),
 
             work_ram: vec![0; 0x2000].into_boxed_slice(),
+
+            serial_buffer: 0,
+            serial_control: 0,
 
             high_ram: vec![0; 0x7f].into_boxed_slice(),
 
@@ -73,8 +79,16 @@ impl Bus {
             self.latch = self.work_ram[address - 0xc000];
         }
 
+        else if address >= 0xe000 && address < 0xfe00 {
+            self.latch = self.work_ram[address - 0xe000];
+        }
+
         else if address >= 0xfe00 && address < 0xfea0 {
             self.latch = self.ppu.vram_read(address as u16);
+        }
+
+        else if address >= 0xfea0 && address < 0xff00 {
+            println!("WARN: read from unusable memory");
         }
 
         else if address >= 0xff00 && address < 0xff80 {
@@ -102,16 +116,28 @@ impl Bus {
         self.latch = value;
         let latch = self.latch;
 
-        if address >= 0x8000 && address < 0xa000 {
+        if address < 0x8000 {
+            self.cartridge.write_rom(address, latch);
+        }
+
+        else if address >= 0x8000 && address < 0xa000 {
             self.ppu.vram_write(address as u16, latch);
         }
         
         else if address >= 0xc000 && address < 0xe000 {
-            self.work_ram[address - 0xc000] = self.latch;
+            self.work_ram[address - 0xc000] = latch;
+        }
+
+        else if address >= 0xe000 && address < 0xfe00 {
+            self.work_ram[address - 0xe000] = latch;
         }
 
         else if address >= 0xfe00 && address < 0xfea0 {
             self.ppu.vram_write(address as u16, latch)
+        }
+
+        else if address >= 0xfea0 && address < 0xff00 {
+            println!("WARN: write to unusable memory");
         }
 
         else if address >= 0xff00 && address < 0xff80 {
@@ -123,7 +149,7 @@ impl Bus {
         }
 
         else if address == 0xffff {
-            self.ie = InterruptEnable::from_bits_truncate(self.latch);
+            self.ie = InterruptEnable::from_bits_truncate(latch);
         }
 
         else {
@@ -133,6 +159,8 @@ impl Bus {
 
     pub fn io_read(&mut self, address: u16) -> u8 {
         self.latch = match address {
+            0xff01 => self.serial_buffer,
+            0xff02 => self.serial_control,
             0xff40 => self.ppu.lcdc_read(),
             0xff42 => self.ppu.scy_read(),
             0xff44 => self.ppu.ly_read(),
@@ -145,6 +173,14 @@ impl Bus {
 
     pub fn io_write(&mut self, address: u16, value: u8) {
         match address {
+            0xff01 => self.serial_buffer = value,
+            0xff02 => {
+                self.serial_control = value;
+
+                if self.serial_control == 0x81 {
+                    println!("SERIAL TRANSFER: {}", self.serial_buffer as char);
+                }
+            }
             0xff40 => self.ppu.lcdc_write(value),
             0xff42 => self.ppu.scy_write(value),
             0xff44 => (),

@@ -239,19 +239,19 @@ impl Ppu {
     }
 
     pub fn tick(&mut self) {
-        self.mode_clocks += 1;
+        self.mode_clocks += 4;
 
         match self.mode {
             PpuMode::OAM => {
-                if self.mode_clocks == PPU_OAM_CLOCKS {
-                    self.mode_clocks = 0;
+                if self.mode_clocks >= PPU_OAM_CLOCKS {
+                    self.mode_clocks -= PPU_OAM_CLOCKS;
                     self.mode = PpuMode::VRAM;
                 }
             },
 
             PpuMode::VRAM => {
-                if self.mode_clocks == PPU_VRAM_CLOCKS {
-                    self.mode_clocks = 0;
+                if self.mode_clocks >= PPU_VRAM_CLOCKS {
+                    self.mode_clocks -= PPU_VRAM_CLOCKS;
                     self.mode = PpuMode::HBLANK;
 
                     if self.control.lcd_enable && self.control.background_enable {
@@ -261,8 +261,8 @@ impl Ppu {
             },
 
             PpuMode::HBLANK => {
-                if self.mode_clocks == PPU_HBLANK_CLOCKS {
-                    self.mode_clocks = 0;
+                if self.mode_clocks >= PPU_HBLANK_CLOCKS {
+                    self.mode_clocks -= PPU_HBLANK_CLOCKS;
                     self.scanline += 1;
 
                     if self.scanline == PPU_VBLANK_START {
@@ -276,8 +276,8 @@ impl Ppu {
             },
 
             PpuMode::VBLANK => {
-                if self.mode_clocks == PPU_VBLANK_CLOCKS {
-                    self.mode_clocks = 0;
+                if self.mode_clocks >= PPU_VBLANK_CLOCKS {
+                    self.mode_clocks -= PPU_VBLANK_CLOCKS;
                     self.scanline += 1;
 
                     if self.scanline == PPU_VBLANK_END {

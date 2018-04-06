@@ -14,8 +14,7 @@ pub struct SdlContext {
     canvas: sdl2::render::WindowCanvas,
     texture_creator: sdl2::render::TextureCreator<sdl2::video::WindowContext>,
 
-    start_time: time::Instant,
-    end_time: time::Instant,
+    last_time: time::Instant,
 }
 
 impl SdlContext {
@@ -32,8 +31,7 @@ impl SdlContext {
             canvas: canvas,
             texture_creator: texture_creator,
 
-            start_time: time::Instant::now(),
-            end_time: time::Instant::now(),
+            last_time: time::Instant::now(),
         }
     }
 
@@ -76,9 +74,9 @@ impl SdlContext {
     }
 
     pub fn sleep_frame(&mut self) {
-        self.end_time = time::Instant::now();
+        let current_time = time::Instant::now();
         
-        let elapsed = self.end_time.duration_since(self.start_time);
+        let elapsed = current_time.duration_since(self.last_time);
 		let elapsed_ms = (elapsed.as_secs() as f64 * 1000.0) + (elapsed.subsec_nanos() as f64 / 1000000.0);
 
         if elapsed_ms < FRAME_TIME {
@@ -89,6 +87,6 @@ impl SdlContext {
             }
         }
 
-        self.start_time = time::Instant::now();
+        self.last_time = time::Instant::now();
     }
 }

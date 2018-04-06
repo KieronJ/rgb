@@ -84,7 +84,7 @@ impl Cartridge {
     }
 
     pub fn write_rom(&mut self, address: usize, value: u8) {
-        panic!("ERROR: write to rom")
+        println!("WARN: write to rom")
     }
 
     pub fn read_ram(&self, address: usize) -> u8 {
