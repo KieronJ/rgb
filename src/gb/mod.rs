@@ -1,16 +1,21 @@
 mod bus;
 mod cartridge;
+mod controller;
 mod ppu;
 mod window;
 mod z80;
 
+use self::bus::Bus;
+use self::cartridge::Cartridge;
+use self::z80::Z80;
+
 pub struct Gameboy {
-    cpu: z80::Z80,
+    cpu: Z80,
 }
 
 impl Gameboy {
     pub fn new(cartridge_filepath: &str) -> Gameboy {
-        let cartridge = cartridge::Cartridge::new(cartridge_filepath);
+        let cartridge = Cartridge::new(cartridge_filepath);
         cartridge.print_cartridge_info();
 
         let mapper = cartridge.get_type().get_mapper();
@@ -19,24 +24,18 @@ impl Gameboy {
         //    panic!("ERROR: unsupported mapper {:#?}", mapper);
         //}
 
-        let bus = bus::Bus::new(cartridge);
+        let bus = Bus::new(cartridge);
 
         Gameboy {
-            cpu: z80::Z80::new(bus),
+            cpu: Z80::new(bus),
         }
     }
 
     pub fn run(&mut self) {
-        loop {
-            self.cpu.run();
-        }
+        self.cpu.run();
     }
 
     pub fn reset(&mut self) {
         self.cpu.reset();
-    }
-
-    pub fn cpu(&self) -> &z80::Z80 {
-        &self.cpu
     }
 }

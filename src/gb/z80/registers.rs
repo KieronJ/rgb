@@ -8,17 +8,6 @@ bitflags! {
 }
 
 #[derive(Clone, Copy)]
-pub enum Reg8 {
-    A,
-    B,
-    C,
-    D,
-    E,
-    H,
-    L,
-}
-
-#[derive(Clone, Copy)]
 pub enum Reg16 {
     AF,
     BC,
@@ -53,30 +42,6 @@ impl Registers {
             f: Flags::empty(),
             h: 0,
             l: 0,
-        }
-    }
-
-    pub fn read8(&self, reg: Reg8) -> u8 {
-        match reg {
-            Reg8::A => self.a,
-            Reg8::B => self.b,
-            Reg8::C => self.c,
-            Reg8::D => self.d,
-            Reg8::E => self.e,
-            Reg8::H => self.h,
-            Reg8::L => self.l,
-        }
-    }
-
-    pub fn write8(&mut self, reg: Reg8, value: u8) {
-        match reg {
-            Reg8::A => self.a = value,
-            Reg8::B => self.b = value,
-            Reg8::C => self.c = value,
-            Reg8::D => self.d = value,
-            Reg8::E => self.e = value,
-            Reg8::H => self.h = value,
-            Reg8::L => self.l = value,
         }
     }
 

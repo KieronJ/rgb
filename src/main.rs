@@ -2,14 +2,19 @@
 extern crate bitflags;
 extern crate sdl2;
 
+mod gb;
+
 use std::env;
 
-mod gb;
+use gb::Gameboy;
 
 fn main() {
     let cartridge_filepath = env::args().nth(1).unwrap();
 
-    let mut gb = gb::Gameboy::new(&cartridge_filepath);
+    let mut gb = Gameboy::new(&cartridge_filepath);
     gb.reset();
-    gb.run();
+
+    loop {
+        gb.run();
+    }
 }

@@ -4,7 +4,7 @@ use super::ppu;
 const BOOTROM: &'static [u8] = include_bytes!("../../bootrom/DMG_ROM.bin");
 
 bitflags! {
-    pub struct InterruptEnable: u8 {
+    pub struct Interrupts: u8 {
         const JOYPAD   = 0b00010000;
         const SERIAL   = 0b00001000;
         const TIMER    = 0b00000100;
@@ -30,7 +30,8 @@ pub struct Bus {
 
     high_ram: Box<[u8]>,
 
-    ie: InterruptEnable,
+    interrupt_enable: Interrupts,
+    interrupt_flag: Interrupts,
 }
 
 impl Bus {
@@ -52,7 +53,8 @@ impl Bus {
 
             high_ram: vec![0; 0x7f].into_boxed_slice(),
 
-            ie: InterruptEnable::empty(),
+            interrupt_enable: Interrupts::empty(),
+            interrupt_flag: Interrupts::empty(),
         }
     }
 
@@ -100,7 +102,7 @@ impl Bus {
         }
 
         else if address == 0xffff {
-            self.latch = self.ie.bits()
+            self.latch = self.interrupt_enable.bits()
         }
 
         else {
@@ -149,7 +151,7 @@ impl Bus {
         }
 
         else if address == 0xffff {
-            self.ie = InterruptEnable::from_bits_truncate(latch);
+            self.interrupt_enable = Interrupts::from_bits_truncate(latch);
         }
 
         else {
@@ -157,22 +159,25 @@ impl Bus {
         }
     }
 
-    pub fn io_read(&mut self, address: u16) -> u8 {
+    fn io_read(&mut self, address: u16) -> u8 {
         self.latch = match address {
+            0xff00 => self.ppu.controller_read(),
             0xff01 => self.serial_buffer,
             0xff02 => self.serial_control,
+            0xff0f => self.process_interrupt_flag(),
             0xff40 => self.ppu.lcdc_read(),
             0xff42 => self.ppu.scy_read(),
             0xff44 => self.ppu.ly_read(),
             0xff47 => self.ppu.bgp_read(),
-            _ => { println!("WARN: read from unimplemented i/o register 0x{:04x}", address); self.latch },
+            _ => { println!("WARN: read from unimplemented i/o register 0x{:04x}", address); 0xff },
         };
 
         self.latch
     }
 
-    pub fn io_write(&mut self, address: u16, value: u8) {
+    fn io_write(&mut self, address: u16, value: u8) {
         match address {
+            0xff00 => self.ppu.controller_write(value),
             0xff01 => self.serial_buffer = value,
             0xff02 => {
                 self.serial_control = value;
@@ -180,7 +185,8 @@ impl Bus {
                 if self.serial_control == 0x81 {
                     println!("SERIAL TRANSFER: {}", self.serial_buffer as char);
                 }
-            }
+            },
+            0xff0f => self.interrupt_flag = Interrupts::from_bits_truncate(value),
             0xff40 => self.ppu.lcdc_write(value),
             0xff42 => self.ppu.scy_write(value),
             0xff44 => (),
@@ -190,7 +196,35 @@ impl Bus {
         }
     }
 
+    fn process_interrupt_flag(&mut self) -> u8 {
+        if self.ppu.controller().get_interrupt_status() {
+            self.interrupt_flag.set(Interrupts::JOYPAD, true);
+        }
+
+        if self.ppu.get_vblank_status() {
+            self.interrupt_flag.set(Interrupts::VBLANK, true);
+        }
+
+        self.interrupt_flag.bits()
+    }
+
     pub fn tick(&mut self) {
         self.ppu.tick();
+    }
+
+    pub fn debug_read(&self, address: u16) -> Option<u8> {
+        let address = address as usize;
+
+        if self.bootrom_enabled && address < 0x100 {
+            let value = self.bootrom[address];
+            return Some(value);
+        }
+
+        else if address < 0x8000 {
+            let value = self.cartridge.read_rom(address);
+            return Some(value);
+        }
+
+        None
     }
 }

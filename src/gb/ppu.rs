@@ -1,4 +1,5 @@
-use super::window;
+use super::controller::Controller;
+use super::window::SdlContext;
 
 pub const PPU_DISPLAY_WIDTH: usize = 160;
 pub const PPU_DISPLAY_HEIGHT: usize = 144;
@@ -28,8 +29,8 @@ pub struct PpuControl {
     lcd_enable: bool,
     //...
     window_enable: bool,
-    //...
-    //...
+    background_pattern_address: bool,
+    background_tile_address: bool,
     sprite_size: PpuSpriteSize,
     sprite_enable: bool,
     background_enable: bool,
@@ -40,6 +41,8 @@ impl PpuControl {
         PpuControl {
             lcd_enable: false,
             window_enable: false,
+            background_pattern_address: false,
+            background_tile_address: false,
             sprite_size: PpuSpriteSize::NORMAL,
             sprite_enable: false,
             background_enable: false,
@@ -47,16 +50,20 @@ impl PpuControl {
     }
 
     pub fn read(&self) -> u8 {
-        (self.lcd_enable as u8)    << 7 |
-        (self.window_enable as u8) << 5 |
-        (self.sprite_size as u8)   << 2 |
-        (self.sprite_enable as u8) << 1 |
+        (self.lcd_enable as u8)                 << 7 |
+        (self.window_enable as u8)              << 5 |
+        (self.background_pattern_address as u8) << 4 |
+        (self.background_tile_address as u8)    << 3 |
+        (self.sprite_size as u8)                << 2 |
+        (self.sprite_enable as u8)              << 1 |
         self.background_enable as u8
     }
 
     pub fn write(&mut self, value: u8) {
         self.lcd_enable = (value & 0x80) != 0;
         self.window_enable = (value & 0x20) != 0;
+        self.background_pattern_address = (value & 0x10) != 0;
+        self.background_tile_address = (value & 0x08) != 0;
 
         self.sprite_size = match (value & 0x04) != 0 {
             false => PpuSpriteSize::NORMAL,
@@ -128,7 +135,8 @@ impl PpuPalette {
 }
 
 pub struct Ppu {
-    window: window::SdlContext,
+    window: SdlContext,
+    controller: Controller,
 
     framebuffer: Box<[PpuShade]>,
 
@@ -157,12 +165,15 @@ pub struct Ppu {
     mode: PpuMode,
     mode_clocks: usize,
     scanline: usize,
+
+    vblank: bool,
 }
 
 impl Ppu {
     pub fn new() -> Ppu {
         Ppu {
-            window: window::SdlContext::new(PPU_DISPLAY_WIDTH, PPU_DISPLAY_HEIGHT, "rgb"),
+            window: SdlContext::new(PPU_DISPLAY_WIDTH, PPU_DISPLAY_HEIGHT, "rgb"),
+            controller: Controller::new(),
 
             framebuffer: vec![PpuShade::WHITE; PPU_DISPLAY_WIDTH * PPU_DISPLAY_HEIGHT].into_boxed_slice(),
 
@@ -191,6 +202,8 @@ impl Ppu {
             mode: PpuMode::OAM,
             mode_clocks: 0,
             scanline: 0,
+
+            vblank: false,
         }
     }
 
@@ -267,6 +280,9 @@ impl Ppu {
 
                     if self.scanline == PPU_VBLANK_START {
                         self.mode = PpuMode::VBLANK;
+                        self.vblank = true;
+
+                        self.window.handle_events(&mut self.controller);
                         self.window.render(&self.framebuffer);
                         self.window.sleep_frame();
                     } else {
@@ -289,16 +305,38 @@ impl Ppu {
         };
     }
 
+    fn get_scrolled_scanline(&self) -> usize {
+        (self.scanline + self.scroll_y as usize) % 256
+    }
+
+    fn get_bg_tile(&mut self, index: usize) -> u8 {
+        let mut tile_address = match self.control.background_tile_address {
+            true => 0x9c00,
+            false => 0x9800,
+        };
+
+        tile_address += (self.get_scrolled_scanline() / 8) * 32;
+
+        self.vram_read((tile_address + index) as u16)
+    }
+
     fn render_scanline(&mut self) {
-        let scrolled_scanline = (self.scanline + self.scroll_y as usize) % 256;
-
-        let background_map_address = (scrolled_scanline / 8) * 32;
-
         for i in 0..20 {
-            let tile_number = self.background_ram[background_map_address + i];
-            let tile_row = scrolled_scanline % 8;
+            let tile_number = self.get_bg_tile(i);
+            let tile_row = self.get_scrolled_scanline() % 8;
 
-            let tile_address = (tile_number as usize * 16) + (tile_row * 2);
+            let pattern_base;
+            let fixed_tile;
+
+            if self.control.background_pattern_address {
+                pattern_base = 0;
+                fixed_tile = tile_number;
+            } else {
+                pattern_base = 0x800;
+                fixed_tile = (tile_number as i8 as isize + 128) as u8;
+            }
+
+            let tile_address = pattern_base + (fixed_tile as usize * 16) + (tile_row * 2);
 
             let tile_lo = self.tile_ram[tile_address];
             let tile_hi = self.tile_ram[tile_address + 1];
@@ -319,6 +357,27 @@ impl Ppu {
                 };
             }
         }
+    }
+
+    pub fn controller(&mut self) -> &mut Controller {
+        &mut self.controller
+    }
+
+    pub fn get_vblank_status(&mut self) -> bool {
+        if self.vblank {
+            self.vblank = false;
+            return true;
+        }
+
+        false
+    }
+
+    pub fn controller_read(&self) -> u8 {
+        self.controller.read()
+    }
+
+    pub fn controller_write(&mut self, value: u8) {
+        self.controller.write(value);
     }
 
     pub fn lcdc_read(&self) -> u8 {

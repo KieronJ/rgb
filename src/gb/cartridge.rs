@@ -83,7 +83,7 @@ impl Cartridge {
         }
     }
 
-    pub fn write_rom(&mut self, address: usize, value: u8) {
+    pub fn write_rom(&mut self, _: usize, _: u8) {
         println!("WARN: write to rom")
     }
 

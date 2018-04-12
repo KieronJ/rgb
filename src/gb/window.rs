@@ -2,9 +2,11 @@ use std::thread;
 use std::time;
 
 use sdl2;
+use sdl2::event::Event;
 use sdl2::pixels::PixelFormatEnum;
 use sdl2::rect::Rect;
 
+use super::controller::Controller;
 use super::ppu::PpuShade;
 
 pub const FRAME_TIME: f64 = (1.0 / 59.7) * 1000.0;
@@ -35,9 +37,18 @@ impl SdlContext {
         }
     }
 
-    pub fn handle_events(&mut self) {
+    pub fn handle_events(&mut self, controller: &mut Controller) {
         for event in self.event_pump.poll_iter() {
             match event {
+                Event::Quit {..} => panic!(),
+                
+                Event::KeyDown {keycode, ..} => {
+					controller.set(keycode.unwrap(), true);
+				},
+
+				Event::KeyUp {keycode, ..} => {
+					controller.set(keycode.unwrap(), false);
+				},
                 _ => {}
             }
         }
