@@ -1,12 +1,15 @@
 mod bus;
 mod cartridge;
 mod controller;
+mod mapper;
 mod ppu;
+mod timer;
 mod window;
 mod z80;
 
 use self::bus::Bus;
 use self::cartridge::Cartridge;
+use self::mapper::Mapper;
 use self::z80::Z80;
 
 pub struct Gameboy {
@@ -16,15 +19,11 @@ pub struct Gameboy {
 impl Gameboy {
     pub fn new(cartridge_filepath: &str) -> Gameboy {
         let cartridge = Cartridge::new(cartridge_filepath);
-        cartridge.print_cartridge_info();
+        let mapper = Mapper::new(cartridge);
 
-        let mapper = cartridge.get_type().get_mapper();
+        mapper.info();
 
-        //if mapper != cartridge::CartridgeMapper::NONE {
-        //    panic!("ERROR: unsupported mapper {:#?}", mapper);
-        //}
-
-        let bus = Bus::new(cartridge);
+        let bus = Bus::new(mapper);
 
         Gameboy {
             cpu: Z80::new(bus),

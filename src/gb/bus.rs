@@ -1,5 +1,6 @@
-use super::cartridge;
-use super::ppu;
+use super::mapper::Mapper;
+use super::ppu::Ppu;
+use super::timer::Timer;
 
 const BOOTROM: &'static [u8] = include_bytes!("../../bootrom/DMG_ROM.bin");
 
@@ -19,14 +20,16 @@ pub struct Bus {
     bootrom: Box<[u8]>,
     bootrom_enabled: bool,
 
-    cartridge: cartridge::Cartridge,
+    mapper: Box<Mapper + Send>,
 
-    ppu: ppu::Ppu,
+    ppu: Ppu,
 
     work_ram: Box<[u8]>,
 
     serial_buffer: u8,
     serial_control: u8,
+
+    timer: Timer,
 
     high_ram: Box<[u8]>,
 
@@ -35,21 +38,23 @@ pub struct Bus {
 }
 
 impl Bus {
-    pub fn new(cartridge: cartridge::Cartridge) -> Bus {
+    pub fn new(mapper: Box<Mapper + Send>) -> Bus {
         Bus {
             latch: 0,
 
             bootrom: Box::from(BOOTROM),
             bootrom_enabled: true,
 
-            cartridge: cartridge,
+            mapper: mapper,
 
-            ppu: ppu::Ppu::new(),
+            ppu: Ppu::new(),
 
             work_ram: vec![0; 0x2000].into_boxed_slice(),
 
             serial_buffer: 0,
             serial_control: 0,
+
+            timer: Timer::new(),
 
             high_ram: vec![0; 0x7f].into_boxed_slice(),
 
@@ -59,34 +64,36 @@ impl Bus {
     }
 
     pub fn read(&mut self, address: u16) -> u8 {
-        let address = address as usize;
-
         if address < 0x0100 && self.bootrom_enabled {
-            self.latch = self.bootrom[address];
+            self.latch = self.bootrom[address as usize];
         }
         
         else if address < 0x0100 {
-            self.latch = self.cartridge.read_rom(address);
+            self.latch = self.mapper.read_rom(address);
         }
         
         else if address >= 0x0100 && address < 0x8000 {
-            self.latch = self.cartridge.read_rom(address);
+            self.latch = self.mapper.read_rom(address);
         }
         
         else if address >= 0x8000 && address < 0xa000 {
             self.latch = self.ppu.vram_read(address as u16);
         }
         
+        else if address >= 0xa000 && address < 0xc000 {
+            self.latch = self.mapper.read_ram(address);
+        }
+
         else if address >= 0xc000 && address < 0xe000 {
-            self.latch = self.work_ram[address - 0xc000];
+            self.latch = self.work_ram[address as usize - 0xc000];
         }
 
         else if address >= 0xe000 && address < 0xfe00 {
-            self.latch = self.work_ram[address - 0xe000];
+            self.latch = self.work_ram[address as usize - 0xe000];
         }
 
         else if address >= 0xfe00 && address < 0xfea0 {
-            self.latch = self.ppu.vram_read(address as u16);
+            self.latch = self.ppu.vram_read(address);
         }
 
         else if address >= 0xfea0 && address < 0xff00 {
@@ -94,11 +101,11 @@ impl Bus {
         }
 
         else if address >= 0xff00 && address < 0xff80 {
-            self.latch = self.io_read(address as u16);
+            self.latch = self.io_read(address);
         }
         
         else if address >= 0xff80 && address < 0xffff {
-            self.latch = self.high_ram[address - 0xff80];
+            self.latch = self.high_ram[address as usize - 0xff80];
         }
 
         else if address == 0xffff {
@@ -113,29 +120,31 @@ impl Bus {
     }
 
     pub fn write(&mut self, address: u16, value: u8) {
-        let address = address as usize;
-
         self.latch = value;
         let latch = self.latch;
 
         if address < 0x8000 {
-            self.cartridge.write_rom(address, latch);
+            self.mapper.write_rom(address, latch);
         }
 
         else if address >= 0x8000 && address < 0xa000 {
-            self.ppu.vram_write(address as u16, latch);
+            self.ppu.vram_write(address, latch);
         }
         
+        else if address >= 0xa000 && address < 0xc000 {
+            self.mapper.write_ram(address, latch);
+        }
+
         else if address >= 0xc000 && address < 0xe000 {
-            self.work_ram[address - 0xc000] = latch;
+            self.work_ram[address as usize - 0xc000] = latch;
         }
 
         else if address >= 0xe000 && address < 0xfe00 {
-            self.work_ram[address - 0xe000] = latch;
+            self.work_ram[address as usize - 0xe000] = latch;
         }
 
         else if address >= 0xfe00 && address < 0xfea0 {
-            self.ppu.vram_write(address as u16, latch)
+            self.ppu.vram_write(address, latch)
         }
 
         else if address >= 0xfea0 && address < 0xff00 {
@@ -143,11 +152,11 @@ impl Bus {
         }
 
         else if address >= 0xff00 && address < 0xff80 {
-            self.io_write(address as u16, latch);
+            self.io_write(address, latch);
         }
         
         else if address >= 0xff80 && address < 0xffff {
-            self.high_ram[address - 0xff80] = latch;
+            self.high_ram[address as usize - 0xff80] = latch;
         }
 
         else if address == 0xffff {
@@ -164,11 +173,18 @@ impl Bus {
             0xff00 => self.ppu.controller_read(),
             0xff01 => self.serial_buffer,
             0xff02 => self.serial_control,
+            0xff04 => self.timer.div_read(),
+            0xff05 => self.timer.tima_read(),
+            0xff06 => self.timer.tma_read(),
+            0xff07 => self.timer.tac_read(),
             0xff0f => self.process_interrupt_flag(),
             0xff40 => self.ppu.lcdc_read(),
+            0xff41 => self.ppu.stat_read(),
             0xff42 => self.ppu.scy_read(),
             0xff44 => self.ppu.ly_read(),
             0xff47 => self.ppu.bgp_read(),
+            0xff48 => self.ppu.obp1_read(),
+            0xff49 => self.ppu.obp2_read(),
             _ => { println!("WARN: read from unimplemented i/o register 0x{:04x}", address); 0xff },
         };
 
@@ -186,11 +202,26 @@ impl Bus {
                     println!("SERIAL TRANSFER: {}", self.serial_buffer as char);
                 }
             },
+            0xff04 => self.timer.div_write(value),
+            0xff05 => self.timer.tima_write(value),
+            0xff06 => self.timer.tma_write(value),
+            0xff07 => self.timer.tac_write(value),
             0xff0f => self.interrupt_flag = Interrupts::from_bits_truncate(value),
             0xff40 => self.ppu.lcdc_write(value),
+            0xff41 => self.ppu.stat_write(value),
             0xff42 => self.ppu.scy_write(value),
             0xff44 => (),
+            0xff46 => {
+                let data_address = (value as u16) << 8;
+
+                for i in 0x00..0xa0 {
+                    let data = self.read(data_address + i);
+                    self.write(0xfe00 + i, data);
+                }
+            }
             0xff47 => self.ppu.bgp_write(value),
+            0xff48 => self.ppu.obp1_write(value),
+            0xff49 => self.ppu.obp2_write(value),
             0xff50 => self.bootrom_enabled = false,
             _ => println!("WARN: write to unimplemented i/o register 0x{:04x}", address),
         }
@@ -201,6 +232,10 @@ impl Bus {
             self.interrupt_flag.set(Interrupts::JOYPAD, true);
         }
 
+        if self.timer.get_interrupt_status() {
+            self.interrupt_flag.set(Interrupts::TIMER, true);
+        }
+
         if self.ppu.get_vblank_status() {
             self.interrupt_flag.set(Interrupts::VBLANK, true);
         }
@@ -209,22 +244,9 @@ impl Bus {
     }
 
     pub fn tick(&mut self) {
-        self.ppu.tick();
-    }
-
-    pub fn debug_read(&self, address: u16) -> Option<u8> {
-        let address = address as usize;
-
-        if self.bootrom_enabled && address < 0x100 {
-            let value = self.bootrom[address];
-            return Some(value);
+        for _ in 0..4 {
+            self.ppu.tick();
+            self.timer.tick();
         }
-
-        else if address < 0x8000 {
-            let value = self.cartridge.read_rom(address);
-            return Some(value);
-        }
-
-        None
     }
 }

@@ -88,7 +88,7 @@ impl Controller {
             _ => valid = false,
         };
 
-        if valid && (prev == true) && (state == false) {
+        if valid && prev && state {
             self.interrupt = true;
         }
     }

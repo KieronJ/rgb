@@ -12,7 +12,8 @@ pub const PPU_VBLANK_CLOCKS: usize = 456;
 pub const PPU_VBLANK_START: usize = 144;
 pub const PPU_VBLANK_END: usize = 154;
 
-enum PpuMode {
+#[derive(Clone, Copy)]
+pub enum PpuMode {
     OAM,
     VRAM,
     HBLANK,
@@ -93,9 +94,30 @@ impl PpuStatus {
             coincidence: false,
         }
     }
+
+    pub fn read(&self, mode: PpuMode) -> u8 {
+        (self.coincidence_interrupt_enable as u8) << 6 |
+        (self.oam_interrupt_enable as u8)         << 5 |
+        (self.vblank_interrupt_enable as u8)      << 4 |
+        (self.hblank_interrupt_enable as u8)      << 3 |
+        (self.coincidence as u8)                  << 2 |
+        match mode {
+            PpuMode::HBLANK => 0b00,
+            PpuMode::VBLANK => 0b01,
+            PpuMode::OAM => 0b10,
+            PpuMode::VRAM => 0b11,
+        }
+    }
+
+    pub fn write(&mut self, value: u8) {
+        self.coincidence_interrupt_enable = (value & 0x40) != 0;
+        self.oam_interrupt_enable = (value & 0x20) != 0;
+        self.vblank_interrupt_enable = (value & 0x10) != 0;
+        self.hblank_interrupt_enable = (value & 0x08) != 0;
+    }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum PpuShade {
     WHITE,
     LIGHT,
@@ -131,6 +153,20 @@ impl PpuPalette {
             colour1: PpuShade::WHITE,
             colour0: PpuShade::WHITE,
         }
+    }
+
+    pub fn read(&self) -> u8 {
+        ((self.colour3 as u8) << 6) |
+        ((self.colour2 as u8) << 4) |
+        ((self.colour1 as u8) << 2) |
+          self.colour0 as u8
+    }
+
+    pub fn write(&mut self, value: u8) {
+        self.colour3 = PpuShade::from_u8((value >> 6) & 0x03);
+        self.colour2 = PpuShade::from_u8((value >> 4) & 0x03);
+        self.colour1 = PpuShade::from_u8((value >> 2) & 0x03);
+        self.colour0 = PpuShade::from_u8(value & 0x03);
     }
 }
 
@@ -252,7 +288,7 @@ impl Ppu {
     }
 
     pub fn tick(&mut self) {
-        self.mode_clocks += 4;
+        self.mode_clocks += 1;
 
         match self.mode {
             PpuMode::OAM => {
@@ -267,7 +303,7 @@ impl Ppu {
                     self.mode_clocks -= PPU_VRAM_CLOCKS;
                     self.mode = PpuMode::HBLANK;
 
-                    if self.control.lcd_enable && self.control.background_enable {
+                    if self.control.lcd_enable {
                         self.render_scanline();
                     }
                 }
@@ -310,51 +346,114 @@ impl Ppu {
     }
 
     fn get_bg_tile(&mut self, index: usize) -> u8 {
-        let mut tile_address = match self.control.background_tile_address {
+        let mut tile_base = match self.control.background_tile_address {
             true => 0x9c00,
             false => 0x9800,
         };
 
-        tile_address += (self.get_scrolled_scanline() / 8) * 32;
+        tile_base += (self.get_scrolled_scanline() / 8) * 32;
 
-        self.vram_read((tile_address + index) as u16)
+        let tile_address = (tile_base + index) as u16;
+
+        self.vram_read(tile_address)
+    }
+
+    fn get_bg_pattern(&mut self, tile: u8, row: usize, order: usize) -> u8 {
+        let pattern_base;
+        let pattern_tile;
+
+        if self.control.background_pattern_address {
+            pattern_base = 0x8000;
+            pattern_tile = tile;
+        } else {
+            pattern_base = 0x8800;
+            pattern_tile = (tile as i8 as isize).wrapping_add(0x80) as u8;
+        }
+
+        let pattern_address = pattern_base + (pattern_tile as usize * 16) + (row * 2) + order;
+
+        self.vram_read(pattern_address as u16)
+    }
+
+    fn get_sprite_pattern(&mut self, tile: u8, row: usize, order: usize) -> u8 {
+        let pattern_address = 0x8000 + (tile as usize * 16) + (row * 2) + order;
+        self.vram_read(pattern_address as u16)
+    }
+
+    fn sprite_inrange(&mut self, y: usize) -> bool {
+        let scanline = self.get_scrolled_scanline();
+        y <= scanline && scanline <= (y + 7)
     }
 
     fn render_scanline(&mut self) {
-        for i in 0..20 {
-            let tile_number = self.get_bg_tile(i);
-            let tile_row = self.get_scrolled_scanline() % 8;
+        if self.control.background_enable {
+            for i in 0..20 {
+                let tile_number = self.get_bg_tile(i);
+                let tile_row = self.get_scrolled_scanline() % 8;
 
-            let pattern_base;
-            let fixed_tile;
+                let tile_lo = self.get_bg_pattern(tile_number, tile_row, 0);
+                let tile_hi = self.get_bg_pattern(tile_number, tile_row, 1);
 
-            if self.control.background_pattern_address {
-                pattern_base = 0;
-                fixed_tile = tile_number;
-            } else {
-                pattern_base = 0x800;
-                fixed_tile = (tile_number as i8 as isize + 128) as u8;
+                for j in 0..8 {
+                    let framebuffer_address = (self.scanline * 160) + (i * 8) + j;
+
+                    let pixel_shade_hi = ((tile_hi << j) & 0x80) >> 6;
+                    let pixel_shade_lo = ((tile_lo << j) & 0x80) >> 7;
+                    let pixel_shade = pixel_shade_hi | pixel_shade_lo;
+
+                    self.framebuffer[framebuffer_address] = match pixel_shade {
+                        0b00 => self.background_palette.colour0,
+                        0b01 => self.background_palette.colour1,
+                        0b10 => self.background_palette.colour2,
+                        0b11 => self.background_palette.colour3,
+                        _ => unreachable!()
+                    };
+                }
             }
+        }
 
-            let tile_address = pattern_base + (fixed_tile as usize * 16) + (tile_row * 2);
+        if self.control.sprite_enable {
+            for i in 0..40 {
+                let y = self.sprite_oam[i * 4] as usize - 16;
+                let x = self.sprite_oam[(i * 4) + 1] as usize - 8;
+                let sprite_tile = self.sprite_oam[(i * 4) + 2];
+                let options = self.sprite_oam[(i * 4) + 3];
 
-            let tile_lo = self.tile_ram[tile_address];
-            let tile_hi = self.tile_ram[tile_address + 1];
+                if self.sprite_inrange(y) {
+                    let palette = match (options & 0x10) != 0 {
+                        false => self.sprite_palette_0,
+                        true => self.sprite_palette_1,
+                    };
 
-            for j in 0..8 {
-                let framebuffer_address = (self.scanline * 160) + (i * 8) + j;
+                    let scanline = self.get_scrolled_scanline();
 
-                let pixel_shade_hi = ((tile_hi << j) & 0x80) >> 6;
-                let pixel_shade_lo = ((tile_lo << j) & 0x80) >> 7;
-                let pixel_shade = pixel_shade_hi | pixel_shade_lo;
+                    let sprite_row = scanline - y;
 
-                self.framebuffer[framebuffer_address] = match pixel_shade {
-                    0b00 => self.background_palette.colour0,
-                    0b01 => self.background_palette.colour1,
-                    0b10 => self.background_palette.colour2,
-                    0b11 => self.background_palette.colour3,
-                    _ => unreachable!()
-                };
+                    let sprite_lo = self.get_sprite_pattern(sprite_tile, sprite_row, 0);
+                    let sprite_hi = self.get_sprite_pattern(sprite_tile, sprite_row, 1);
+
+                    for j in 0..8 {
+                        let framebuffer_address = (self.scanline * 160) + x + j;
+
+                        let sprite_shade_hi = ((sprite_hi << j) & 0x80) >> 6;
+                        let sprite_shade_lo = ((sprite_lo << j) & 0x80) >> 7;
+                        let sprite_shade = sprite_shade_hi | sprite_shade_lo;
+
+                        let pixel_shade = match sprite_shade {
+                            0b00 => palette.colour0,
+                            0b01 => palette.colour1,
+                            0b10 => palette.colour2,
+                            0b11 => palette.colour3,
+                            _ => unreachable!()
+                        };
+
+                        if sprite_shade != 0 {
+                            if (options & 0x80) == 0 || self.framebuffer[framebuffer_address] == self.background_palette.colour0 {
+                                self.framebuffer[framebuffer_address] = pixel_shade;
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -380,6 +479,14 @@ impl Ppu {
         self.controller.write(value);
     }
 
+    pub fn stat_read(&self) -> u8 {
+        self.status.read(self.mode)
+    }
+
+    pub fn stat_write(&mut self, value: u8) {
+        self.status.write(value);
+    }
+
     pub fn lcdc_read(&self) -> u8 {
         self.control.read()
     }
@@ -401,16 +508,26 @@ impl Ppu {
     }
 
     pub fn bgp_read(&self) -> u8 {
-        ((self.background_palette.colour3 as u8) << 6) |
-        ((self.background_palette.colour2 as u8) << 4) |
-        ((self.background_palette.colour1 as u8) << 2) |
-          self.background_palette.colour0 as u8
+        self.background_palette.read()
+    }
+
+    pub fn obp1_read(&self) -> u8 {
+        self.sprite_palette_0.read()
+    }
+
+    pub fn obp2_read(&self) -> u8 {
+        self.sprite_palette_1.read()
     }
 
     pub fn bgp_write(&mut self, value: u8) {
-        self.background_palette.colour3 = PpuShade::from_u8((value >> 6) & 0x03);
-        self.background_palette.colour2 = PpuShade::from_u8((value >> 4) & 0x03);
-        self.background_palette.colour1 = PpuShade::from_u8((value >> 2) & 0x03);
-        self.background_palette.colour0 = PpuShade::from_u8(value & 0x03);
+        self.background_palette.write(value);
+    }
+
+    pub fn obp1_write(&mut self, value: u8) {
+        self.sprite_palette_0.write(value);
+    }
+
+    pub fn obp2_write(&mut self, value: u8) {
+        self.sprite_palette_1.write(value);
     }
 }

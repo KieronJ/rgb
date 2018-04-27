@@ -14,6 +14,7 @@ enum AddressingMode {
 
 use self::AddressingMode::{A, B, C, D, E, H, L, HLP, IMM};
 
+#[derive(Clone, Copy, PartialEq)]
 enum Cond {
     NONE,
     C, NC,
@@ -45,7 +46,9 @@ impl Z80 {
 
     fn interrupt(&mut self, address: u16) {
         self.ime = false;
-        self.halt = false;
+
+        self.bus.tick();
+        self.bus.tick();
 
         let pc = self.regs.pc;
         self.push16(pc);
@@ -53,36 +56,48 @@ impl Z80 {
         self.regs.pc = address;
     }
 
-    fn check_interrupts(&mut self) {
+    fn check_interrupts(&mut self) -> bool {
         let _ie = self.bus.read(0xffff);
         let _if = self.bus.read(0xff0f);
 
         let interrupt_status = _ie & _if;
 
-        if (interrupt_status & 0x01) != 0 {
-            self.write8(0xff0f, _if & 0xfe);
-            self.interrupt(0x40);
+        let interrupt = interrupt_status != 0;
+
+        if self.ime {
+            if (interrupt_status & 0x01) != 0 {
+                self.write8(0xff0f, _if & !0x01);
+                self.interrupt(0x40);
+            }
+
+            else if (interrupt_status & 0x04) != 0 {
+                self.write8(0xff0f, _if & !0x04);
+                self.interrupt(0x50);
+            }
+
+            else if (interrupt_status & 0x10) != 0 {
+                self.write8(0xff0f, _if & !0x10);
+                self.interrupt(0x60);
+            }
         }
 
-        else if (interrupt_status & 0x10) != 0 {
-            self.write8(0xff0f, _if & 0xef);
-            self.interrupt(0x60);
-        }
+        interrupt
     }
 
     pub fn run(&mut self) {
-        if self.ime {
-            self.check_interrupts();
+        if self.check_interrupts() {
+            self.bus.tick();
+            self.halt = false;
         }
 
         if self.regs.pc == 0x100 {
             println!("INFO: finished bootstrap");
         }
 
-        if !self.halt {
-            self.execute_instruction();
-        } else {
+        if self.halt {
             self.bus.tick();
+        } else {
+            self.execute_instruction();
         }
     }
 
@@ -345,7 +360,7 @@ impl Z80 {
     }
 
     fn read16(&mut self, address: u16) -> u16 {
-        (self.bus.read(address) as u16) | ((self.bus.read(address + 1) as u16) << 8)
+        (self.read8(address) as u16) | ((self.read8(address + 1) as u16) << 8)
     }
 
     fn write8(&mut self, address: u16, value: u8) {
@@ -354,8 +369,8 @@ impl Z80 {
     }
 
     fn write16(&mut self, address: u16, value: u16) {
-        self.bus.write(address, value as u8);
-        self.bus.write(address + 1, (value >> 8) as u8);
+        self.write8(address, value as u8);
+        self.write8(address + 1, (value >> 8) as u8);
     }
 
     fn imm(&mut self) -> u16 {
@@ -406,7 +421,6 @@ impl Z80 {
     }
 
     fn halt(&mut self) {
-        self.ime = true;
         self.halt = true;
     }
 
@@ -478,10 +492,15 @@ impl Z80 {
         self.regs.f.set(Flags::SUBTRACT, false);
         self.regs.f.set(Flags::HALFCARRY, (sp & 0x0f) + (value & 0x0f) > 0x0f);
         self.regs.f.set(Flags::CARRY, (sp & 0xff) + (value & 0xff) > 0xff);
+
+        self.bus.tick();
+        self.bus.tick();
     }
 
     fn ld_sp_hl(&mut self) {
         self.regs.sp = self.regs.read16(HL);
+        
+        self.bus.tick();
     }
 
     fn ld_hl_sp_n(&mut self) {
@@ -496,6 +515,8 @@ impl Z80 {
         self.regs.f.set(Flags::SUBTRACT, false);
         self.regs.f.set(Flags::HALFCARRY, (sp & 0x0f) + (value & 0x0f) > 0x0f);
         self.regs.f.set(Flags::CARRY, (sp & 0xff) + (value & 0xff) > 0xff);
+
+        self.bus.tick();
     }
 
     fn rst(&mut self, address: u16) {
@@ -503,13 +524,18 @@ impl Z80 {
         self.push16(pc);
 
         self.regs.pc = address;
+
+        self.bus.tick();
     }
 
     fn jp(&mut self, cond: Cond) {
         let pc = self.imm16();
+        let dest = self.read16(pc);
 
         if self.condition_met(cond) {
-            self.regs.pc = self.read16(pc);
+            self.regs.pc = dest;
+
+            self.bus.tick();
         }
     }
 
@@ -527,6 +553,8 @@ impl Z80 {
         self.regs.f.set(Flags::SUBTRACT, false);
         self.regs.f.set(Flags::HALFCARRY, (hl & 0xfff) + (value & 0xfff) > 0xfff);
         self.regs.f.set(Flags::CARRY, (hl as usize) + (value as usize) > 0xffff);
+
+        self.bus.tick();
     }
 
     fn adc(&mut self, mode: AddressingMode) {
@@ -599,6 +627,8 @@ impl Z80 {
     }
 
     fn push_nn(&mut self, reg: Reg16) {
+        self.bus.tick();
+
         let value = self.regs.read16(reg);
         self.push16(value);
     }
@@ -609,14 +639,22 @@ impl Z80 {
     }
 
     fn ret(&mut self, cond: Cond) {
+        if cond != Cond::NONE {
+            self.bus.tick();
+        }
+
         if self.condition_met(cond) {
             self.regs.pc = self.pop16();
+
+            self.bus.tick();
         }
     }
 
     fn reti(&mut self) {
         self.ime = true;
         self.regs.pc = self.pop16();
+
+        self.bus.tick();
     }
 
     fn condition_met(&self, cond: Cond) -> bool {
@@ -643,14 +681,18 @@ impl Z80 {
 
     fn inc16(&mut self, reg: Reg16) {
         let value = self.regs.read16(reg);
-        
+
         self.regs.write16(reg, value.wrapping_add(1));
+
+        self.bus.tick();
     }
 
     fn dec16(&mut self, reg: Reg16) {
         let value = self.regs.read16(reg);
         
         self.regs.write16(reg, value.wrapping_sub(1));
+
+        self.bus.tick();
     }
 
     fn dec(&mut self, mode: AddressingMode) {
@@ -709,10 +751,12 @@ impl Z80 {
 
     fn jr(&mut self, cond: Cond) {
         let pc = self.imm();
+        let value = self.read8(pc) as i8;
 
         if self.condition_met(cond) {
-            let value = self.read8(pc) as i8;
             self.regs.pc = self.regs.pc.wrapping_add(value as u16);
+
+            self.bus.tick();
         }
     }
 
@@ -1254,10 +1298,13 @@ impl Z80 {
 
     fn call(&mut self, cond: Cond) {
         let pc = self.imm16();
+        let dest = self.read16(pc);
 
         if self.condition_met(cond) {
+            self.bus.tick();
+
             self.push16(pc + 2);
-            self.regs.pc = self.read16(pc);
+            self.regs.pc = dest;
         }
     }
 }
