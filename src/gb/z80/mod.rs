@@ -70,6 +70,11 @@ impl Z80 {
                 self.interrupt(0x40);
             }
 
+            else if (interrupt_status & 0x02) != 0 {
+                self.write8(0xff0f, _if & !0x02);
+                self.interrupt(0x48);
+            }
+
             else if (interrupt_status & 0x04) != 0 {
                 self.write8(0xff0f, _if & !0x04);
                 self.interrupt(0x50);
@@ -88,10 +93,6 @@ impl Z80 {
         if self.check_interrupts() {
             self.bus.tick();
             self.halt = false;
-        }
-
-        if self.regs.pc == 0x100 {
-            println!("INFO: finished bootstrap");
         }
 
         if self.halt {

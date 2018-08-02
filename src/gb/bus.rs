@@ -1,6 +1,9 @@
+use super::apu::Apu;
+use super::audio_system::AudioSystem;
 use super::mapper::Mapper;
 use super::ppu::Ppu;
 use super::timer::Timer;
+use super::video_system::VideoSystem;
 
 const BOOTROM: &'static [u8] = include_bytes!("../../bootrom/DMG_ROM.bin");
 
@@ -22,6 +25,7 @@ pub struct Bus {
 
     mapper: Box<Mapper + Send>,
 
+    apu: Apu,
     ppu: Ppu,
 
     work_ram: Box<[u8]>,
@@ -38,7 +42,7 @@ pub struct Bus {
 }
 
 impl Bus {
-    pub fn new(mapper: Box<Mapper + Send>) -> Bus {
+    pub fn new(mapper: Box<Mapper + Send>, audio_system: AudioSystem, video_system: VideoSystem) -> Bus {
         Bus {
             latch: 0,
 
@@ -47,7 +51,8 @@ impl Bus {
 
             mapper: mapper,
 
-            ppu: Ppu::new(),
+            apu: Apu::new(audio_system),
+            ppu: Ppu::new(video_system),
 
             work_ram: vec![0; 0x2000].into_boxed_slice(),
 
@@ -98,6 +103,7 @@ impl Bus {
 
         else if address >= 0xfea0 && address < 0xff00 {
             println!("WARN: read from unusable memory");
+            self.latch = 0x00;
         }
 
         else if address >= 0xff00 && address < 0xff80 {
@@ -148,7 +154,7 @@ impl Bus {
         }
 
         else if address >= 0xfea0 && address < 0xff00 {
-            println!("WARN: write to unusable memory");
+
         }
 
         else if address >= 0xff00 && address < 0xff80 {
@@ -181,7 +187,9 @@ impl Bus {
             0xff40 => self.ppu.lcdc_read(),
             0xff41 => self.ppu.stat_read(),
             0xff42 => self.ppu.scy_read(),
+            0xff43 => self.ppu.scx_read(),
             0xff44 => self.ppu.ly_read(),
+            0xff45 => self.ppu.lyc_read(),
             0xff47 => self.ppu.bgp_read(),
             0xff48 => self.ppu.obp1_read(),
             0xff49 => self.ppu.obp2_read(),
@@ -207,10 +215,19 @@ impl Bus {
             0xff06 => self.timer.tma_write(value),
             0xff07 => self.timer.tac_write(value),
             0xff0f => self.interrupt_flag = Interrupts::from_bits_truncate(value),
+            0xff11 => self.apu.nr11_write(value),
+            0xff12 => self.apu.nr12_write(value),
+            0xff13 => self.apu.nr13_write(value),
+            0xff14 => self.apu.nr14_write(value),
+            0xff24 => self.apu.nr50_write(value),
+            0xff25 => self.apu.nr51_write(value),
+            0xff26 => self.apu.nr52_write(value),
             0xff40 => self.ppu.lcdc_write(value),
             0xff41 => self.ppu.stat_write(value),
             0xff42 => self.ppu.scy_write(value),
+            0xff43 => self.ppu.scx_write(value),
             0xff44 => (),
+            0xff45 => self.ppu.lyc_write(value),
             0xff46 => {
                 let data_address = (value as u16) << 8;
 
@@ -236,6 +253,10 @@ impl Bus {
             self.interrupt_flag.set(Interrupts::TIMER, true);
         }
 
+        if self.ppu.get_lcdc_status() {
+            self.interrupt_flag.set(Interrupts::LCD_STAT, true);
+        }
+
         if self.ppu.get_vblank_status() {
             self.interrupt_flag.set(Interrupts::VBLANK, true);
         }
@@ -245,6 +266,7 @@ impl Bus {
 
     pub fn tick(&mut self) {
         for _ in 0..4 {
+            self.apu.tick();
             self.ppu.tick();
             self.timer.tick();
         }

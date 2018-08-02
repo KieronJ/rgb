@@ -89,7 +89,8 @@ impl Cartridge {
         if address < self.get_ram_size().unwrap() {
             self.ram[address]
         } else {
-            panic!("ERROR: read from out of bounds ram address")
+            println!("WARN: read from out of bounds ram address");
+            0xff
         }
     }
 
@@ -101,7 +102,7 @@ impl Cartridge {
         if address < self.get_ram_size().unwrap() {
             self.ram[address] = value
         } else {
-            panic!("ERROR: write to out of bounds ram address")
+            println!("WARN: write to out of bounds ram address");
         }
     }
 
@@ -126,18 +127,56 @@ impl Cartridge {
     }
 
     pub fn get_rom_size(&self) -> Result<usize, &str> {
-        Ok(0x8000 << self.rom[0x148])
+        match self.rom[0x148] {
+            0x00 => Ok(0x8000),
+            0x01 => Ok(0x10000),
+            0x02 => Ok(0x20000),
+            0x03 => Ok(0x40000),
+            0x04 => Ok(0x80000),
+            0x05 => Ok(0x100000),
+            0x06 => Ok(0x200000),
+            0x07 => Ok(0x400000),
+            0x08 => Ok(0x800000),
+            _ => Err("ERROR: invalid cartridge ROM size")
+        }
+    }
+
+    pub fn get_rom_banks(&self) -> Result<usize, &str> {
+        match self.rom[0x148] {
+            0x00 => Ok(2),
+            0x01 => Ok(4),
+            0x02 => Ok(8),
+            0x03 => Ok(16),
+            0x04 => Ok(32),
+            0x05 => Ok(64),
+            0x06 => Ok(128),
+            0x07 => Ok(256),
+            0x08 => Ok(512),
+            _ => Err("ERROR: invalid cartridge ROM size")
+        }
     }
 
     pub fn get_ram_size(&self) -> Result<usize, &str> {
         match self.rom[0x149] {
-            0x00 => Ok(0x0),
+            0x00 => Ok(0),
+            0x01 => Ok(1),
+            0x02 => Ok(1),
+            0x03 => Ok(4),
+            0x04 => Ok(16),
+            0x05 => Ok(8),
+            _ => Err("ERROR: invalid cartridge RAM size")
+        }
+    }
+
+    pub fn get_ram_banks(&self) -> Result<usize, &str> {
+        match self.rom[0x149] {
+            0x00 => Ok(0),
             0x01 => Ok(0x800),
             0x02 => Ok(0x2000),
             0x03 => Ok(0x8000),
             0x04 => Ok(0x20000),
             0x05 => Ok(0x10000),
-            _ => Err("ERROR: invalid cartridge ram size")
+            _ => Err("ERROR: invalid cartridge RAM size")
         }
     }
 
@@ -167,10 +206,12 @@ impl Cartridge {
         println!("Type: {:#?}", self.get_type());
 
         let rom_size = self.get_rom_size().unwrap();
-        println!("ROM Size: {}kb ({} banks)", rom_size / 0x400, rom_size / 0x4000);
+        let rom_banks = self.get_rom_banks().unwrap();
+        println!("ROM Size: {}kb ({} banks)", rom_size / 0x400, rom_banks);
 
         let ram_size = self.get_ram_size().unwrap();
-        println!("RAM Size: {}kb ({} banks)", ram_size / 0x400, ram_size / 0x2000);
+        let ram_banks = self.get_ram_banks().unwrap();
+        println!("RAM Size: {}kb ({} banks)", ram_size / 0x400, ram_banks);
 
         println!("Language: {:#?}", self.get_language());
     }

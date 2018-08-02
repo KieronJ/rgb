@@ -79,7 +79,15 @@ impl MapperMBC1 {
         }
     }
 
-    fn rom_bank(&self) -> u8 {
+    fn rom_bank_lower(&self) -> u8 {
+        if self.banking_mode == MBC1BankingMode::ROM {
+            (self.ram_bank & 0x03) << 5
+        } else {
+            0
+        }
+    }
+
+    fn rom_bank_upper(&self) -> u8 {
         let mut rom_bank = self.rom_bank & 0x1f;
 
         if self.banking_mode == MBC1BankingMode::ROM {
@@ -103,26 +111,29 @@ impl MapperMBC1 {
 impl Mapper for MapperMBC1 {
     fn read_rom(&mut self, address: u16) -> u8 {
         let address = address as usize;
-        let mut bank = 0;
+        let bank;
 
         if address >= 0x4000 {
-            bank = self.rom_bank() as usize;
+            bank = self.rom_bank_upper() as usize;
+        } else {
+            bank = self.rom_bank_lower() as usize;
         }
-
-        let bank_address = bank * 0x4000 + (address & 0x3fff);
-        self.cartridge.read_rom(bank_address)
+        
+        let rom_size = self.cartridge.get_rom_size().unwrap() - 1;
+        let bank_address = (bank * 0x4000) | (address & 0x3fff);
+        self.cartridge.read_rom(bank_address & rom_size)
     }
 
     fn read_ram(&mut self, address: u16) -> u8 {
         let address = address as usize;
         let bank = self.ram_bank() as usize;
 
-        let bank_address = bank * 0x2000 + (address & 0x1fff);
+        let ram_size = self.cartridge.get_ram_size().unwrap() - 1;
+        let bank_address = (bank * 0x2000) | (address & 0x1fff);
 
         if self.ram_enable {
-            self.cartridge.read_ram(bank_address)
+            self.cartridge.read_ram(bank_address & ram_size)
         } else {
-            println!("WARN: read from disabled RAM at 0x{:04x}", address);
             0xff
         }
     }
@@ -135,8 +146,8 @@ impl Mapper for MapperMBC1 {
             0x2000...0x3fff => {
                 self.rom_bank = value & 0x1f;
 
-                if self.rom_bank == 0 {
-                    self.rom_bank += 1;
+                if self.rom_bank & 0x1f == 0 {
+                    self.rom_bank = 0x01;
                 }
             },
             0x4000...0x5fff => {
@@ -156,12 +167,11 @@ impl Mapper for MapperMBC1 {
         let address = address as usize;
         let bank = self.ram_bank() as usize;
 
-        let bank_address = (bank * 0x2000) + address & 0x1fff;
+        let ram_size = self.cartridge.get_ram_size().unwrap().wrapping_sub(1);
+        let bank_address = (bank * 0x2000) | (address & 0x1fff);
 
         if self.ram_enable {
-            self.cartridge.write_ram(bank_address, value);
-        } else {
-            println!("WARN: write to disabled RAM at 0x{:04x}", address);
+            self.cartridge.write_ram(bank_address & ram_size, value);
         }
     }
 

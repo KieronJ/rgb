@@ -1,5 +1,5 @@
 use super::controller::Controller;
-use super::window::SdlContext;
+use super::video_system::VideoSystem;
 
 pub const PPU_DISPLAY_WIDTH: usize = 160;
 pub const PPU_DISPLAY_HEIGHT: usize = 144;
@@ -171,7 +171,7 @@ impl PpuPalette {
 }
 
 pub struct Ppu {
-    window: SdlContext,
+    video_system: VideoSystem,
     controller: Controller,
 
     framebuffer: Box<[PpuShade]>,
@@ -203,12 +203,13 @@ pub struct Ppu {
     scanline: usize,
 
     vblank: bool,
+    stat_interrupt: bool,
 }
 
 impl Ppu {
-    pub fn new() -> Ppu {
+    pub fn new(video_system: VideoSystem) -> Ppu {
         Ppu {
-            window: SdlContext::new(PPU_DISPLAY_WIDTH, PPU_DISPLAY_HEIGHT, "rgb"),
+            video_system: video_system,
             controller: Controller::new(),
 
             framebuffer: vec![PpuShade::WHITE; PPU_DISPLAY_WIDTH * PPU_DISPLAY_HEIGHT].into_boxed_slice(),
@@ -240,6 +241,7 @@ impl Ppu {
             scanline: 0,
 
             vblank: false,
+            stat_interrupt: false,
         }
     }
 
@@ -292,16 +294,20 @@ impl Ppu {
 
         match self.mode {
             PpuMode::OAM => {
-                if self.mode_clocks >= PPU_OAM_CLOCKS {
-                    self.mode_clocks -= PPU_OAM_CLOCKS;
+                if self.mode_clocks == PPU_OAM_CLOCKS {
+                    self.mode_clocks = 0;
                     self.mode = PpuMode::VRAM;
                 }
             },
 
             PpuMode::VRAM => {
-                if self.mode_clocks >= PPU_VRAM_CLOCKS {
-                    self.mode_clocks -= PPU_VRAM_CLOCKS;
+                if self.mode_clocks == PPU_VRAM_CLOCKS {
+                    self.mode_clocks = 0;
                     self.mode = PpuMode::HBLANK;
+
+                    if self.status.hblank_interrupt_enable {
+                        self.stat_interrupt = true;
+                    }
 
                     if self.control.lcd_enable {
                         self.render_scanline();
@@ -310,39 +316,75 @@ impl Ppu {
             },
 
             PpuMode::HBLANK => {
-                if self.mode_clocks >= PPU_HBLANK_CLOCKS {
-                    self.mode_clocks -= PPU_HBLANK_CLOCKS;
+                if self.mode_clocks == PPU_HBLANK_CLOCKS {
+                    self.mode_clocks = 0;
                     self.scanline += 1;
 
                     if self.scanline == PPU_VBLANK_START {
                         self.mode = PpuMode::VBLANK;
                         self.vblank = true;
 
-                        self.window.handle_events(&mut self.controller);
-                        self.window.render(&self.framebuffer);
-                        self.window.sleep_frame();
+                        if self.status.vblank_interrupt_enable {
+                            self.stat_interrupt = true;
+                        }
+
+                        self.video_system.handle_events(&mut self.controller);
+                        self.video_system.render(&self.framebuffer);
+                        self.video_system.sleep_frame();
                     } else {
                         self.mode = PpuMode::OAM;
+
+                        if self.status.oam_interrupt_enable {
+                            self.stat_interrupt = true;
+                        }
                     }
+                }
+
+                if self.scanline == self.ly_compare as usize {
+                    self.status.coincidence = true;         
+                    
+                    if self.status.coincidence_interrupt_enable {
+                        self.stat_interrupt = true;
+                    }
+                } else {
+                    self.status.coincidence = false;
                 }
             },
 
             PpuMode::VBLANK => {
-                if self.mode_clocks >= PPU_VBLANK_CLOCKS {
-                    self.mode_clocks -= PPU_VBLANK_CLOCKS;
+                if self.mode_clocks == PPU_VBLANK_CLOCKS {
+                    self.mode_clocks = 0;
                     self.scanline += 1;
 
                     if self.scanline == PPU_VBLANK_END {
                         self.mode = PpuMode::OAM;
                         self.scanline = 0;
+
+                        if self.status.oam_interrupt_enable {
+                            self.stat_interrupt = true;
+                        }
                     }
+                }
+
+                if self.scanline == self.ly_compare as usize {
+                    self.status.coincidence = true;
+
+                    if self.status.coincidence_interrupt_enable {
+                        self.stat_interrupt = true;
+                    }
+                } else {
+                    self.status.coincidence = false;
                 }
             },
         };
     }
 
-    fn get_scrolled_scanline(&self) -> usize {
+    fn get_scrolled_y(&self) -> usize {
         (self.scanline + self.scroll_y as usize) % 256
+    }
+
+    fn get_scrolled_x(&self, x: usize) -> usize {
+        (x + self.scroll_x as usize) % 256
     }
 
     fn get_bg_tile(&mut self, index: usize) -> u8 {
@@ -351,7 +393,7 @@ impl Ppu {
             false => 0x9800,
         };
 
-        tile_base += (self.get_scrolled_scanline() / 8) * 32;
+        tile_base += (self.get_scrolled_y() / 8) * 32;
 
         let tile_address = (tile_base + index) as u16;
 
@@ -380,63 +422,102 @@ impl Ppu {
         self.vram_read(pattern_address as u16)
     }
 
-    fn sprite_inrange(&mut self, y: usize) -> bool {
-        let scanline = self.get_scrolled_scanline();
-        y <= scanline && scanline <= (y + 7)
+    fn sprite_inrange(&mut self, y: isize) -> bool {
+        y <= self.scanline as isize && self.scanline as isize <= (y + 7)
     }
 
     fn render_scanline(&mut self) {
         if self.control.background_enable {
-            for i in 0..20 {
-                let tile_number = self.get_bg_tile(i);
-                let tile_row = self.get_scrolled_scanline() % 8;
+            let y = self.get_scrolled_y();
+
+            for i in 0..160 {
+                let x = self.get_scrolled_x(i);
+
+                let tile_number = self.get_bg_tile(x / 8);
+
+                let tile_col = x % 8;
+                let tile_row = y % 8;
 
                 let tile_lo = self.get_bg_pattern(tile_number, tile_row, 0);
                 let tile_hi = self.get_bg_pattern(tile_number, tile_row, 1);
 
-                for j in 0..8 {
-                    let framebuffer_address = (self.scanline * 160) + (i * 8) + j;
+                let framebuffer_address = self.scanline * 160 + i;
 
-                    let pixel_shade_hi = ((tile_hi << j) & 0x80) >> 6;
-                    let pixel_shade_lo = ((tile_lo << j) & 0x80) >> 7;
-                    let pixel_shade = pixel_shade_hi | pixel_shade_lo;
+                let pixel_shade_lo = ((tile_lo << tile_col) & 0x80) >> 7;
+                let pixel_shade_hi = ((tile_hi << tile_col) & 0x80) >> 6;
+                let pixel_shade = pixel_shade_hi | pixel_shade_lo;
 
-                    self.framebuffer[framebuffer_address] = match pixel_shade {
-                        0b00 => self.background_palette.colour0,
-                        0b01 => self.background_palette.colour1,
-                        0b10 => self.background_palette.colour2,
-                        0b11 => self.background_palette.colour3,
-                        _ => unreachable!()
-                    };
-                }
+                self.framebuffer[framebuffer_address] = match pixel_shade {
+                    0b00 => self.background_palette.colour0,
+                    0b01 => self.background_palette.colour1,
+                    0b10 => self.background_palette.colour2,
+                    0b11 => self.background_palette.colour3,
+                    _ => unreachable!(),
+                };
             }
         }
 
+        //if self.control.background_enable {
+        //    for i in 0..20 {
+        //        let x = self.get_scrolled_x(i * 8);
+//
+        //        let tile_number = self.get_bg_tile(x / 8);
+        //        let tile_row = self.get_scrolled_y() % 8;
+//
+        //        let tile_lo = self.get_bg_pattern(tile_number, tile_row, 0);
+        //        let tile_hi = self.get_bg_pattern(tile_number, tile_row, 1);
+//
+        //        for j in 0..8 {
+        //            let framebuffer_address = (self.scanline * 160) + (i * 8) + j;
+//
+        //            let pixel_shade_hi = ((tile_hi << j) & 0x80) >> 6;
+        //            let pixel_shade_lo = ((tile_lo << j) & 0x80) >> 7;
+        //            let pixel_shade = pixel_shade_hi | pixel_shade_lo;
+//
+        //            self.framebuffer[framebuffer_address] = match pixel_shade {
+        //                0b00 => self.background_palette.colour0,
+        //                0b01 => self.background_palette.colour1,
+        //                0b10 => self.background_palette.colour2,
+        //                0b11 => self.background_palette.colour3,
+        //                _ => unreachable!()
+        //            };
+        //        }
+        //    }
+        //}
+
         if self.control.sprite_enable {
             for i in 0..40 {
-                let y = self.sprite_oam[i * 4] as usize - 16;
-                let x = self.sprite_oam[(i * 4) + 1] as usize - 8;
+                let y = self.sprite_oam[i * 4] as isize - 16;
+                let x = self.sprite_oam[(i * 4) + 1] as isize - 8;
                 let sprite_tile = self.sprite_oam[(i * 4) + 2];
                 let options = self.sprite_oam[(i * 4) + 3];
 
-                if self.sprite_inrange(y) {
+                if self.sprite_inrange(y) && y >= 0 && y < 144 {
                     let palette = match (options & 0x10) != 0 {
                         false => self.sprite_palette_0,
                         true => self.sprite_palette_1,
                     };
 
-                    let scanline = self.get_scrolled_scanline();
-
-                    let sprite_row = scanline - y;
+                    let sprite_row = self.scanline - y as usize;
 
                     let sprite_lo = self.get_sprite_pattern(sprite_tile, sprite_row, 0);
                     let sprite_hi = self.get_sprite_pattern(sprite_tile, sprite_row, 1);
 
                     for j in 0..8 {
-                        let framebuffer_address = (self.scanline * 160) + x + j;
+                        if (x < 0) || (x as usize + j >= 160) {
+                            continue;
+                        }
 
-                        let sprite_shade_hi = ((sprite_hi << j) & 0x80) >> 6;
-                        let sprite_shade_lo = ((sprite_lo << j) & 0x80) >> 7;
+                        let framebuffer_address = (self.scanline * 160) + x as usize + j;
+
+                        let x_shift = match (options & 0x20) != 0 {
+                            true => 7 - j,
+                            false => j,
+                        };
+
+                        let sprite_shade_hi = ((sprite_hi << x_shift) & 0x80) >> 6;
+                        let sprite_shade_lo = ((sprite_lo << x_shift) & 0x80) >> 7;
+
                         let sprite_shade = sprite_shade_hi | sprite_shade_lo;
 
                         let pixel_shade = match sprite_shade {
@@ -465,6 +546,15 @@ impl Ppu {
     pub fn get_vblank_status(&mut self) -> bool {
         if self.vblank {
             self.vblank = false;
+            return true;
+        }
+
+        false
+    }
+
+    pub fn get_lcdc_status(&mut self) -> bool {
+        if self.stat_interrupt {
+            self.stat_interrupt = false;
             return true;
         }
 
@@ -503,8 +593,24 @@ impl Ppu {
         self.scroll_y = value;
     }
 
+    pub fn scx_read(&self) -> u8 {
+        self.scroll_x
+    }
+
+    pub fn scx_write(&mut self, value: u8) {
+        self.scroll_x = value;
+    }
+
     pub fn ly_read(&self) -> u8 {
         self.scanline as u8
+    }
+
+    pub fn lyc_read(&self) -> u8 {
+        self.ly_compare
+    }
+
+    pub fn lyc_write(&mut self, value: u8) {
+        self.ly_compare = value;
     }
 
     pub fn bgp_read(&self) -> u8 {

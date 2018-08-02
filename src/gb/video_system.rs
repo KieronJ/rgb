@@ -11,7 +11,7 @@ use super::ppu::PpuShade;
 
 pub const FRAME_TIME: f64 = (1.0 / 59.7) * 1000.0;
 
-pub struct SdlContext {
+pub struct VideoSystem {
     event_pump: sdl2::EventPump,
     canvas: sdl2::render::WindowCanvas,
     texture_creator: sdl2::render::TextureCreator<sdl2::video::WindowContext>,
@@ -19,16 +19,15 @@ pub struct SdlContext {
     last_time: time::Instant,
 }
 
-impl SdlContext {
-    pub fn new(width: usize, height: usize, title: &str) -> SdlContext {
-        let context = sdl2::init().unwrap();
+impl VideoSystem {
+    pub fn new(context: &sdl2::Sdl, width: usize, height: usize, title: &str) -> VideoSystem {
         let event_pump = context.event_pump().unwrap();
         let video_subsystem = context.video().unwrap();
         let window = video_subsystem.window(title, width as u32, height as u32).build().unwrap();
         let canvas = window.into_canvas().build().unwrap();
         let texture_creator = canvas.texture_creator();
 
-        SdlContext {
+        VideoSystem {
             event_pump: event_pump,
             canvas: canvas,
             texture_creator: texture_creator,
