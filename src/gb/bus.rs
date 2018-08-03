@@ -219,6 +219,10 @@ impl Bus {
             0xff12 => self.apu.nr12_write(value),
             0xff13 => self.apu.nr13_write(value),
             0xff14 => self.apu.nr14_write(value),
+            0xff16 => self.apu.nr21_write(value),
+            0xff17 => self.apu.nr22_write(value),
+            0xff18 => self.apu.nr23_write(value),
+            0xff19 => self.apu.nr24_write(value),
             0xff24 => self.apu.nr50_write(value),
             0xff25 => self.apu.nr51_write(value),
             0xff26 => self.apu.nr52_write(value),
@@ -240,7 +244,7 @@ impl Bus {
             0xff48 => self.ppu.obp1_write(value),
             0xff49 => self.ppu.obp2_write(value),
             0xff50 => self.bootrom_enabled = false,
-            _ => println!("WARN: write to unimplemented i/o register 0x{:04x}", address),
+            _ => (),//println!("WARN: write to unimplemented i/o register 0x{:04x}", address),
         }
     }
 

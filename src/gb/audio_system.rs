@@ -1,5 +1,5 @@
 use sdl2;
-use sdl2::audio::{AudioQueue, AudioSpecDesired};
+use sdl2::audio::{AudioQueue, AudioSpecDesired, AudioStatus};
 
 pub struct AudioSystem {
     queue: AudioQueue<f32>,
@@ -22,18 +22,9 @@ impl AudioSystem {
 
     pub fn add_samples(&mut self, samples: &[f32]) {
         self.queue.queue(samples);
-        self.queue.queue(samples);
 
-        if self.queue.size() >= 2048 {
+        if self.queue.size() >= 8192 && self.queue.status() != AudioStatus::Playing {
             self.queue.resume();
         }
-    }
-
-    pub fn pause(&mut self) {
-        self.queue.pause();
-    }
-
-    pub fn play(&mut self) {
-        self.queue.resume();
     }
 }
