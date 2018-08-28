@@ -35,9 +35,11 @@ impl Timer {
         }
     }
 
-    pub fn tick(&mut self) {
-        self.tick_divider();
-        self.tick_counter();
+    pub fn tick(&mut self, cycles: usize) {
+        for _ in 0..cycles {
+            self.tick_divider();
+            self.tick_counter();
+        }
     }
 
     fn tick_divider(&mut self) {

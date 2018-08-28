@@ -184,6 +184,31 @@ impl Bus {
             0xff06 => self.timer.tma_read(),
             0xff07 => self.timer.tac_read(),
             0xff0f => self.process_interrupt_flag(),
+            0xff10 => self.apu.nr10_read(),
+            0xff11 => self.apu.nr11_read(),
+            0xff12 => self.apu.nr12_read(),
+            0xff13 => self.apu.nr13_read(),
+            0xff14 => self.apu.nr14_read(),
+            0xff15 => self.apu.nr20_read(),
+            0xff16 => self.apu.nr21_read(),
+            0xff17 => self.apu.nr22_read(),
+            0xff18 => self.apu.nr23_read(),
+            0xff19 => self.apu.nr24_read(),
+            0xff1a => self.apu.nr30_read(),
+            0xff1b => self.apu.nr31_read(),
+            0xff1c => self.apu.nr32_read(),
+            0xff1d => self.apu.nr33_read(),
+            0xff1e => self.apu.nr34_read(),
+            0xff1f => self.apu.nr40_read(),
+            0xff20 => self.apu.nr41_read(),
+            0xff21 => self.apu.nr42_read(),
+            0xff22 => self.apu.nr43_read(),
+            0xff23 => self.apu.nr44_read(),
+            0xff24 => self.apu.nr50_read(),
+            0xff25 => self.apu.nr51_read(),
+            0xff26 => self.apu.nr52_read(),
+            0xff27...0xff2f => 0xff,
+            0xff30...0xff3f => self.apu.read_wavetable(address),
             0xff40 => self.ppu.lcdc_read(),
             0xff41 => self.ppu.stat_read(),
             0xff42 => self.ppu.scy_read(),
@@ -193,7 +218,7 @@ impl Bus {
             0xff47 => self.ppu.bgp_read(),
             0xff48 => self.ppu.obp1_read(),
             0xff49 => self.ppu.obp2_read(),
-            _ => { println!("WARN: read from unimplemented i/o register 0x{:04x}", address); 0xff },
+            _ => { println!("ERROR: read from unimplemented i/o register 0x{:04x}", address); 0xff },
         };
 
         self.latch
@@ -215,17 +240,31 @@ impl Bus {
             0xff06 => self.timer.tma_write(value),
             0xff07 => self.timer.tac_write(value),
             0xff0f => self.interrupt_flag = Interrupts::from_bits_truncate(value),
+            0xff10 => self.apu.nr10_write(value),
             0xff11 => self.apu.nr11_write(value),
             0xff12 => self.apu.nr12_write(value),
             0xff13 => self.apu.nr13_write(value),
             0xff14 => self.apu.nr14_write(value),
+            0xff15 => self.apu.nr20_write(value),
             0xff16 => self.apu.nr21_write(value),
             0xff17 => self.apu.nr22_write(value),
             0xff18 => self.apu.nr23_write(value),
             0xff19 => self.apu.nr24_write(value),
+            0xff1a => self.apu.nr30_write(value),
+            0xff1b => self.apu.nr31_write(value),
+            0xff1c => self.apu.nr32_write(value),
+            0xff1d => self.apu.nr33_write(value),
+            0xff1e => self.apu.nr34_write(value),
+            0xff1f => self.apu.nr40_write(value),
+            0xff20 => self.apu.nr41_write(value),
+            0xff21 => self.apu.nr42_write(value),
+            0xff22 => self.apu.nr43_write(value),
+            0xff23 => self.apu.nr44_write(value),
             0xff24 => self.apu.nr50_write(value),
             0xff25 => self.apu.nr51_write(value),
             0xff26 => self.apu.nr52_write(value),
+            0xff27...0xff2f => (),
+            0xff30...0xff3f => self.apu.write_wavetable(address, value),
             0xff40 => self.ppu.lcdc_write(value),
             0xff41 => self.ppu.stat_write(value),
             0xff42 => self.ppu.scy_write(value),
@@ -244,7 +283,8 @@ impl Bus {
             0xff48 => self.ppu.obp1_write(value),
             0xff49 => self.ppu.obp2_write(value),
             0xff50 => self.bootrom_enabled = false,
-            _ => (),//println!("WARN: write to unimplemented i/o register 0x{:04x}", address),
+            0xff7f => (),
+            _ => println!("WARN: write to unimplemented i/o register 0x{:04x}", address),
         }
     }
 
@@ -269,10 +309,8 @@ impl Bus {
     }
 
     pub fn tick(&mut self) {
-        for _ in 0..4 {
-            self.apu.tick();
-            self.ppu.tick();
-            self.timer.tick();
-        }
+        self.apu.tick(4);
+        self.ppu.tick(4);
+        self.timer.tick(4);
     }
 }

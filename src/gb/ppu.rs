@@ -289,20 +289,20 @@ impl Ppu {
         }
     }
 
-    pub fn tick(&mut self) {
-        self.mode_clocks += 1;
+    pub fn tick(&mut self, cycles: usize) {
+        self.mode_clocks += cycles;
 
         match self.mode {
             PpuMode::OAM => {
-                if self.mode_clocks == PPU_OAM_CLOCKS {
-                    self.mode_clocks = 0;
+                if self.mode_clocks >= PPU_OAM_CLOCKS {
+                    self.mode_clocks -= PPU_OAM_CLOCKS;
                     self.mode = PpuMode::VRAM;
                 }
             },
 
             PpuMode::VRAM => {
-                if self.mode_clocks == PPU_VRAM_CLOCKS {
-                    self.mode_clocks = 0;
+                if self.mode_clocks >= PPU_VRAM_CLOCKS {
+                    self.mode_clocks -= PPU_VRAM_CLOCKS;
                     self.mode = PpuMode::HBLANK;
 
                     if self.status.hblank_interrupt_enable {
@@ -316,8 +316,8 @@ impl Ppu {
             },
 
             PpuMode::HBLANK => {
-                if self.mode_clocks == PPU_HBLANK_CLOCKS {
-                    self.mode_clocks = 0;
+                if self.mode_clocks >= PPU_HBLANK_CLOCKS {
+                    self.mode_clocks -= PPU_HBLANK_CLOCKS;
                     self.scanline += 1;
 
                     if self.scanline == PPU_VBLANK_START {
@@ -330,7 +330,7 @@ impl Ppu {
 
                         self.video_system.handle_events(&mut self.controller);
                         self.video_system.render(&self.framebuffer);
-                        self.video_system.sleep_frame();
+                        self.video_system.sync();
                     } else {
                         self.mode = PpuMode::OAM;
 
@@ -352,8 +352,8 @@ impl Ppu {
             },
 
             PpuMode::VBLANK => {
-                if self.mode_clocks == PPU_VBLANK_CLOCKS {
-                    self.mode_clocks = 0;
+                if self.mode_clocks >= PPU_VBLANK_CLOCKS {
+                    self.mode_clocks -= PPU_VBLANK_CLOCKS;
                     self.scanline += 1;
 
                     if self.scanline == PPU_VBLANK_END {

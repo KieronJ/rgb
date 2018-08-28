@@ -196,6 +196,7 @@ impl Cartridge {
         match self.rom[0x147] {
             0x00 => CartridgeType::new(CartridgeMapper::NONE, false, false, false, false),
             0x01...0x03 => CartridgeType::new(CartridgeMapper::MBC1, false, false, false, false),
+            0x13 => CartridgeType::new(CartridgeMapper::MBC3, false, false, false, false),
             _    => CartridgeType::new(CartridgeMapper::INVALID, false, false, false, false)
         }
     }

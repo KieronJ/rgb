@@ -1,5 +1,5 @@
+use std::time::{Duration, Instant};
 use std::thread;
-use std::time;
 
 use sdl2;
 use sdl2::event::Event;
@@ -9,14 +9,14 @@ use sdl2::rect::Rect;
 use super::controller::Controller;
 use super::ppu::PpuShade;
 
-pub const FRAME_TIME: f64 = (1.0 / 59.7) * 1000.0;
+pub const FRAME_TIME: f64 = (1.0 / 59.73) * 1000.0;
 
 pub struct VideoSystem {
     event_pump: sdl2::EventPump,
     canvas: sdl2::render::WindowCanvas,
     texture_creator: sdl2::render::TextureCreator<sdl2::video::WindowContext>,
 
-    last_time: time::Instant,
+    last_time: Instant,
 }
 
 impl VideoSystem {
@@ -32,7 +32,7 @@ impl VideoSystem {
             canvas: canvas,
             texture_creator: texture_creator,
 
-            last_time: time::Instant::now(),
+            last_time: Instant::now(),
         }
     }
 
@@ -83,8 +83,8 @@ impl VideoSystem {
         self.canvas.present();
     }
 
-    pub fn sleep_frame(&mut self) {
-        let current_time = time::Instant::now();
+    pub fn sync(&mut self) {
+        let current_time = Instant::now();
         
         let elapsed = current_time.duration_since(self.last_time);
 		let elapsed_ms = (elapsed.as_secs() as f64 * 1000.0) + (elapsed.subsec_nanos() as f64 / 1000000.0);
@@ -93,10 +93,10 @@ impl VideoSystem {
             let sleep_time = (FRAME_TIME - elapsed_ms) as u64;
 
             if sleep_time != 0 {
-                thread::sleep(time::Duration::from_millis(sleep_time));
+                thread::sleep(Duration::from_millis(sleep_time));
             }
         }
 
-        self.last_time = time::Instant::now();
+        self.last_time = Instant::now();
     }
 }
